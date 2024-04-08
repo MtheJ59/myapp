@@ -1,6 +1,6 @@
 package bitcamp.myapp.controller;
 
-import bitcamp.myapp.service.Board2Service;
+import bitcamp.myapp.service.BoardService;
 import bitcamp.myapp.service.StorageService;
 import bitcamp.myapp.vo.AttachedFile;
 import bitcamp.myapp.vo.Board;
@@ -14,17 +14,19 @@ import org.apache.commons.logging.LogFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.multipart.MultipartFile;
 
 @RequiredArgsConstructor
 @Controller
-@RequestMapping("/board2")
-@SessionAttributes("attachedFiles")
-public class Board2Controller {
+@RequestMapping("/board")
+public class BoardController {
 
-  private static final Log log = LogFactory.getLog(Board2Controller.class);
-  private final Board2Service boardService;
+  private static final Log log = LogFactory.getLog(BoardController.class);
+  private final BoardService boardService;
   private final StorageService storageService;
   private String uploadDir = "board/";
 
@@ -32,13 +34,15 @@ public class Board2Controller {
   private String bucketName;
 
   @GetMapping("form")
-  public void form() throws Exception {
+  public void form(int category, Model model) throws Exception {
+    model.addAttribute("boardName", category == 1 ? "게시글" : "가입인사");
+    model.addAttribute("category", category);
   }
 
   @PostMapping("add")
   public String add(
       Board board,
-      MultipartFile[] files,
+      MultipartFile[] attachedFiles,
       HttpSession session) throws Exception {
 
     Member loginUser = (Member) session.getAttribute("loginUser");
@@ -47,26 +51,28 @@ public class Board2Controller {
     }
     board.setWriter(loginUser);
 
-    ArrayList<AttachedFile> attachedFiles = new ArrayList<>();
-    for (MultipartFile file : files) {
-      if (file.getSize() == 0) {
-        continue;
+    ArrayList<AttachedFile> files = new ArrayList<>();
+    if (board.getCategory() == 1) {
+      for (MultipartFile file : attachedFiles) {
+        if (file.getSize() == 0) {
+          continue;
+        }
+        String filename = storageService.upload(this.bucketName, this.uploadDir, file);
+        files.add(AttachedFile.builder().filePath(filename).build());
       }
-      String filename = storageService.upload(this.bucketName, this.uploadDir, file);
-      attachedFiles.add(AttachedFile.builder().filePath(filename).build());
     }
-
-    if (attachedFiles.size() > 0) {
-      board.setFileList(attachedFiles);
+    if (files.size() > 0) {
+      board.setFileList(files);
     }
 
     boardService.add(board);
 
-    return "redirect:list";
+    return "redirect:list?category=" + board.getCategory();
   }
 
   @GetMapping("list")
   public void list(
+      int category,
       @RequestParam(defaultValue = "1") int pageNo,
       @RequestParam(defaultValue = "3") int pageSize,
       Model model) throws Exception {
@@ -79,33 +85,37 @@ public class Board2Controller {
       pageNo = 1;
     }
 
-    int numOfRecord = boardService.countAll();
+    int numOfRecord = boardService.countAll(category);
     int numOfPage = numOfRecord / pageSize + ((numOfRecord % pageSize) > 0 ? 1 : 0);
 
     if (pageNo > numOfPage) {
       pageNo = numOfPage;
     }
 
-    model.addAttribute("list", boardService.list(pageNo, pageSize));
+    model.addAttribute("boardName", category == 1 ? "게시글" : "가입인사");
+    model.addAttribute("category", category);
+    model.addAttribute("list", boardService.list(category, pageNo, pageSize));
     model.addAttribute("pageNo", pageNo);
     model.addAttribute("pageSize", pageSize);
     model.addAttribute("numOfPage", numOfPage);
   }
 
   @GetMapping("view")
-  public void view(int no, Model model) throws Exception {
+  public void view(int category, int no, Model model) throws Exception {
     Board board = boardService.get(no);
     if (board == null) {
       throw new Exception("번호가 유효하지 않습니다.");
     }
 
+    model.addAttribute("boardName", category == 1 ? "게시글" : "가입인사");
+    model.addAttribute("category", category);
     model.addAttribute("board", board);
   }
 
   @PostMapping("update")
   public String update(
       Board board,
-      MultipartFile[] files,
+      MultipartFile[] attachedFiles,
       HttpSession session) throws Exception {
 
     Member loginUser = (Member) session.getAttribute("loginUser");
@@ -121,34 +131,28 @@ public class Board2Controller {
       throw new Exception("권한이 없습니다.");
     }
 
-    ArrayList<AttachedFile> attachedFiles = new ArrayList<>();
-    for (MultipartFile file : files) {
-      if (file.getSize() == 0) {
-        continue;
+    ArrayList<AttachedFile> files = new ArrayList<>();
+    if (board.getCategory() == 1) {
+      for (MultipartFile file : attachedFiles) {
+        if (file.getSize() == 0) {
+          continue;
+        }
+        String filename = storageService.upload(this.bucketName, this.uploadDir, file);
+        files.add(AttachedFile.builder().filePath(filename).build());
       }
-      String filename = storageService.upload(this.bucketName, this.uploadDir, file);
-      attachedFiles.add(AttachedFile.builder().filePath(filename).build());
     }
-
-    if (attachedFiles.size() > 0) {
-      board.setFileList(attachedFiles);
+    if (files.size() > 0) {
+      board.setFileList(files);
     }
-
-    // 네이버 스토리지에 저장된 이미지를 지우기 위함
-    List<AttachedFile> oldFiles = boardService.getAttachedFiles(board.getNo());
 
     boardService.update(board);
 
-    for (AttachedFile file : oldFiles) {
-      storageService.delete(this.bucketName, this.uploadDir, file.getFilePath());
-    }
-
-    return "redirect:list";
+    return "redirect:list?category=" + board.getCategory();
 
   }
 
   @GetMapping("delete")
-  public String delete(int no, HttpSession session) throws Exception {
+  public String delete(int category, int no, HttpSession session) throws Exception {
 
     Member loginUser = (Member) session.getAttribute("loginUser");
     if (loginUser == null) {
@@ -171,11 +175,11 @@ public class Board2Controller {
       storageService.delete(this.bucketName, this.uploadDir, file.getFilePath());
     }
 
-    return "redirect:list";
+    return "redirect:list?category=" + category;
   }
 
   @GetMapping("file/delete")
-  public String fileDelete(int no, HttpSession session) throws Exception {
+  public String fileDelete(int category, int no, HttpSession session) throws Exception {
 
     Member loginUser = (Member) session.getAttribute("loginUser");
     if (loginUser == null) {
@@ -196,6 +200,6 @@ public class Board2Controller {
 
     storageService.delete(this.bucketName, this.uploadDir, file.getFilePath());
 
-    return "redirect:../view?no=" + file.getBoardNo();
+    return "redirect:../view?category=" + category + "&no=" + file.getBoardNo();
   }
 }
